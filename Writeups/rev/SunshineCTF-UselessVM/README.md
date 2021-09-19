@@ -8,7 +8,7 @@ Challenge contributed by Research Innovations, Inc (RII). Say hi to crandyman#58
 
 Note: ARM and Intel binaries available for convenient dynamic analysis. The hosted challenge is Intel, but the solution should be independent of architecture.
 ```
-Useless VM was a reversing challenge during SunshineCTF that got 8 solves. I solve this along with my teammate [00xc](https://twitter.com/00xc1).
+Useless VM was a reversing challenge during SunshineCTF that got 8 solves. I solved this along with my teammate [00xc](https://twitter.com/00xc1).
 
 To start, we're provided with an option between either an ARM or Intel binary, but I prefer Intel so we'll stick with that.
 
@@ -32,6 +32,7 @@ The first was with the stack frame size being incorrect in the function . I foun
 After replacing the `call __rust_probestack` with `sub esp, 0x100`, we get the following(much better) decompilation.
 
 ![after](Screenshots/after_change.png)
+
 This small change has taken the code from basically unreadable to much more straighforward and helps us visualize this structure much easier.
 
 It's worth noting that 00xc noticed that this same result occurs when inlining the function in ghidra. I am unsure why this is though.
@@ -44,11 +45,11 @@ self = core::slice::index::{{impl}}::index_mut<u8,core--ops--range--Range<usize>
      (Range<usize>)CONCAT88(in_stack_fffffffffffffec0,in_stack_fffffffffffffeb8));
 ```
 
-In x64 C, according to the System V AMD64 ABI, the calling convention is to pass arguments to functions in the following order: `RDI, RSI, RDX, RCX, R8, R9, etc.`. However, in C, when arguments are bigger than the register size(8-bytes) the arguments will be passed on the stack. This is where rust differs. Rather than passing >8 bytes arguments onto the stack, it elects to continue using the registers and just filling them in the same order.As an example lets continue with the example take a look below at how the stack looks when it's trying to pass the arguments on onto the stack:
+In x64 C, according to the System V AMD64 ABI, the calling convention is to pass arguments to functions in the following order: `RDI, RSI, RDX, RCX, R8, R9, etc.`. In C, when arguments are bigger than the register size(8-bytes), the arguments will be passed on the stack. This is where rust differs. Rather than passing >8 bytes arguments onto the stack, it elects to continue using the registers and filling them with data in the same order as usual. As an example lets continue and take a look below at how the stack frame is structured when it's trying to pass the arguments via stack:
 
 ![on_stack](Screenshots/on_stack.png)
 
-We just want to modify this in ghidra's edit function signature so that the arguments are passed via their specified registers.
+We just need to modify this in ghidra's edit function signature plugion so that the arguments are passed via their specified registers.
 
 ![in_regs](Screenshots/in_regs.png)
 
@@ -59,7 +60,7 @@ self = core::slice::index::{{impl}}::index_mut<u8,core--ops--range--Range<usize>
     ((&mut[u8])CONCAT88(puVar1,uVar2),(Range<usize>)CONCAT88(0xe080,local_38));
 ```
 
-It's still messy, but it's at least an improvement as we have local variables and can actually rename, change, and more easily check verify the instructions operations.
+It's still messy, but it's at least an improvement as now we have local variables and can actually rename, change, and more easily verify the instructions operations.
 
 ## Reverse Reverse!
 
@@ -67,11 +68,11 @@ Okay, on to the actual reversing so we can attain a cool flag. Once again, for b
 
 First we call `new` and initialize a new portion of memory to act as our virtual machine's address space. We setup some registers, memory, and an output_buffer. Next, we call `init_flag`. We like flags around these parts, so this function was definitely of interest. However, the only real thing of interest here is that we see our flag is loaded in at address `0xe080` in our vm's memory. We then take some user_input as bytes, convert that into an iterator, then start iterating. This tells us that we should be able to send our payload with all our opcodes in one line. Going down we run into what we will soon find out is the most interesting function `execute_instruction`.
 
-`execute_instruction` will take the opcode we provide to determine where to jump in the switch statement to execute that instruction
+`execute_instruction` will take the opcode we provide to determine where to jump in the switch statement to execute that specific instruction
 
 ..kind of..
 
-The opcode we pass in is actually right-shifted by 5 `val = opcode >> 5`, this means that if we want to jump into the first case in the switch statement we need to pass a value from 32-63. This is because for all values in that range `opcode >> 5 == 1`. These are the ranges for each of the 7 cases.
+The opcode we pass in is actually right-shifted by 5 `val = opcode >> 5`, this means that if we want to jump into the first case in the switch statement we need to pass a value from 32-63. This is because for all values in that range `opcode >> 5 == 1`. The ranges for all 7 cases are:
 
 
 |     opcode    |   range                       |
@@ -85,9 +86,9 @@ The opcode we pass in is actually right-shifted by 5 `val = opcode >> 5`, this m
 |       7       |    222-255                    |
 |    default    |    < 32 or > 255              |
 
-We also have a operand that is generated based off of the number you choose for the opcode using `operand = opcode & 0x1f`. The reason they have this range is for instructions that allow you to variate the functionality. The only 2 instructions that use this operand are instructions 1 and 2.
+We also have an operand that is generated based off of the number you choose for the opcode using `operand = opcode & 0x1f`. The reason they have this range is for instructions that allow you to variate the functionality. The only 2 instructions that use this operand are instructions 1 and 2.
 
-After using the tricks to demangle the decompiler above, most of the functions in the switch should be straight forward enough to at least mostly decompile. However, here is a list of the instructions converted to psuedo-assembly
+After using the tricks to demangle the decompiler above, most of the functions in the switch should be straight forward enough to at least mostly decompile. However, here is a list of the instructions, after reversing each case in the switch statement, converted to psuedo-assembly
 
 ```
     1: "INC A"
@@ -100,7 +101,7 @@ After using the tricks to demangle the decompiler above, most of the functions i
     8: "EXIT"
 ```
 
-After having all of this information it is now time to construct our gameplan for how we can generate the proper opcodes to assemble that will yield us the flag.
+After having all of this information it is now time to construct our gameplan for how we can generate the proper opcodes to assemble what will yield us the flag.
 
 ## Game Plan
 
@@ -111,7 +112,7 @@ Use the addition instructions that we have(1,2) to add up the high byte and low 
 Call the `MOV M,A` instruction(7) so that we can load M with the contents of A which is now `0xe080`
 
 #### Step 3
-Here we're going to call 3 functions in a row. First, we call `BUF[M]`(3). All BUF[M] does is appends the byte stored at data_ptr[M] into `self->output_buffer`. Doing this loads the first byte of the flag into the buffer. Next,we need to increment A again by calling `INC A`(1) and then write that result back to M with `MOV M,A`. Repear this process for however the long the flag is(I didn't look I just put in like 0x40).
+Here we're going to call 3 functions in a row, then repeat. First, we call `BUF[M]`(3). All BUF[M] does is appends the byte stored at data_ptr[M] into `self->output_buffer`. Doing this loads the first byte of the flag into the buffer. Next,we need to increment A again by calling `INC A`(1) and then write that result back to M with `MOV M,A`. Repear this process for however the long the flag is(I didn't look I just put in like 0x40).
 
 #### Step 4
 Call the function that will print output_buffer(4) and obtain your flag!
